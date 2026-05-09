@@ -31,6 +31,7 @@ AVAILABLE_MODELS = {
     # Install: curl -fsSL https://ollama.com/install.sh | sh
     # Pull model: ollama pull qwen2.5-coder:1.5b
     "ollama/qwen2.5-coder:1.5b": ("Qwen 2.5 Coder 1.5B (Local/Experimental)", "Qwen-Local"),
+    "ollama/qwen3:8b": ("Qwen3 8B (Local)", "Qwen3-8B"),
 }
 
 # Ollama endpoint (can override via env)

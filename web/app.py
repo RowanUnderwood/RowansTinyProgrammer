@@ -68,6 +68,16 @@ def create_app():
             return jsonify({"success": True, "message": "Restart requested"})
         return jsonify({"error": "Brain not initialized"})
 
+    @app.route('/api/shutdown', methods=['POST'])
+    def api_shutdown():
+        """Shut down the Raspberry Pi."""
+        import subprocess
+        try:
+            subprocess.Popen(["sudo", "shutdown", "-h", "now"])
+            return jsonify({"success": True, "message": "Shutdown initiated"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
     @app.route('/api/screensaver/on', methods=['POST'])
     def api_screensaver_on():
         """Start screensaver manually."""

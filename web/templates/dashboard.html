@@ -168,6 +168,7 @@
     {% endif %}
     <a href="/api/screenshot" class="btn-secondary">Screenshot</a>
     <a href="{{ url_for('dashboard') }}" class="btn-secondary">Refresh</a>
+    <button onclick="shutdownPi()" class="btn-danger">Shutdown Pi</button>
 </div>
 
 <script>
@@ -206,6 +207,19 @@ function screensaverOff() {
     fetch('/api/screensaver/off', { method: 'POST' })
         .then(response => response.json())
         .then(data => { if (data.success) setTimeout(() => location.reload(), 2000); })
+        .catch(err => alert('Error: ' + err));
+}
+function shutdownPi() {
+    if (!confirm('Shut down the Pi now?')) return;
+    fetch('/api/shutdown', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('Shutdown initiated. The Pi will power off shortly.');
+            } else {
+                alert('Error: ' + data.error);
+            }
+        })
         .catch(err => alert('Error: ' + err));
 }
 </script>

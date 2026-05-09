@@ -130,6 +130,13 @@ class Terminal:
         # Hide system mouse cursor
         pygame.mouse.set_visible(False)
 
+        # Force 32-bit pixel format before creating any Surface.
+        # With SDL_VIDEODRIVER=dummy, pygame 1.9.x defaults to 8-bit palette
+        # mode (all channel masks = 0), making every fill/blit produce black.
+        # This set_mode call establishes correct RGB masks; the window is never
+        # shown — all output goes through FramebufferWriter to /dev/fb2.
+        pygame.display.set_mode((self.width, self.height), 0, 32)
+
         # Create in-memory surface for rendering
         self.screen = pygame.Surface((self.width, self.height))
 
