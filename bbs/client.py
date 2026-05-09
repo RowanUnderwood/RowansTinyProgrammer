@@ -188,7 +188,7 @@ class BBSClient:
             counts[b] = counts.get(b, 0) + 1
         return [{"board": b, "total_posts": c} for b, c in counts.items()]
 
-    def get_notification(self) -> str | None:
+    def get_notification(self):
         """Fetch the latest visible notification, or None."""
         rows = self._rest_get("notifications", {
             "visible": "eq.true",

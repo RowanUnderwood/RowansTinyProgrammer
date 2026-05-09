@@ -46,7 +46,7 @@ class LikedStore:
             self._items.pop(0)
         self._save()
 
-    def pick(self) -> dict | None:
+    def pick(self):
         """Pick a random liked program, preferring less-remixed ones."""
         if not self._items:
             return None

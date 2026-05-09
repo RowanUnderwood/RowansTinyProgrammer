@@ -207,7 +207,8 @@ def pick_program_type(mood: str, program_types: list, last_type: str = None) -> 
     Types in the mood's preferred categories get a 4x weight boost.
     """
     if not program_types:
-        return "pattern"
+        all_types = [t for types in CATEGORIES.values() for t in types]
+        return random.choice(all_types)
 
     mood_data = MOOD_CREATIVITY.get(mood, MOOD_CREATIVITY["hopeful"])
     preferred_cats = mood_data.get("categories")

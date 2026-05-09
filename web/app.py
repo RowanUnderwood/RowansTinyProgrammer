@@ -394,6 +394,9 @@ def create_app():
                     errors.append("Canvas constraints must be numeric.")
                     canvas_constraints = current.get('CANVAS_CONSTRAINTS')
 
+                if not program_types:
+                    errors.append("At least one program type must be enabled.")
+
                 if errors:
                     message = " ".join(errors)
                     message_type = 'error'
