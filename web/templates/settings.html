@@ -11,19 +11,36 @@
         <h2>LLM Configuration</h2>
 
         <div class="form-group">
-            <label for="llm_model">Model</label>
-            <select name="llm_model" id="llm_model">
-                {% for model_id, model_name in available_models.items() %}
-                <option value="{{ model_id }}" {% if model_id == current_model %}selected{% endif %}>{{ model_name }}</option>
-                {% endfor %}
+            <label for="llm_provider">Provider</label>
+            <select id="llm_provider">
+                <option value="openrouter">OpenRouter (Cloud)</option>
+                <option value="ollama">Ollama (Local)</option>
+                <option value="lmstudio">LM Studio (Local)</option>
             </select>
-            <p class="hint">API key loaded from .env file (OPENROUTER_API_KEY)</p>
         </div>
 
-        <div id="ollama-status" class="ollama-status" style="display:none;">
-            <span class="ollama-indicator"></span>
-            <span class="ollama-text"></span>
+        <div class="form-group" id="endpoint-group">
+            <label>Endpoint</label>
+            <div class="endpoint-row">
+                <input type="text" id="llm_endpoint" autocomplete="off" spellcheck="false"
+                       placeholder="http://192.168.2.83:11434">
+                <button type="button" id="refresh-btn" class="btn-secondary">Refresh</button>
+            </div>
+            <p class="hint" id="endpoint-status"></p>
         </div>
+
+        <div class="form-group">
+            <label for="llm_model_select">Model</label>
+            <select id="llm_model_select">
+                <option value="">-- select provider first --</option>
+            </select>
+            <p class="hint" id="model-hint"></p>
+        </div>
+
+        <!-- Hidden fields submitted with the form -->
+        <input type="hidden" name="llm_model" id="llm_model_hidden">
+        <input type="hidden" name="ollama_endpoint" id="ollama_ep_hidden">
+        <input type="hidden" name="lmstudio_endpoint" id="lmstudio_ep_hidden">
 
         <div class="form-group">
             <label for="llm_temperature">Temperature (0.0 - 1.0)</label>
@@ -234,59 +251,156 @@
 </form>
 
 <script>
+var _llm = {
+    current:    {{ current_model | tojson }},
+    ollamaEp:   {{ config.OLLAMA_ENDPOINT | tojson }},
+    lmstudioEp: {{ config.LMSTUDIO_ENDPOINT | tojson }},
+    orModels:   {{ openrouter_models | tojson }}
+};
+
 (function() {
-    var statusEl = document.getElementById('ollama-status');
-    var indicatorEl = statusEl.querySelector('.ollama-indicator');
-    var textEl = statusEl.querySelector('.ollama-text');
-    var selectEl = document.getElementById('llm_model');
-    var savedModel = {{ current_model | tojson }};
+    var providerEl  = document.getElementById('llm_provider');
+    var endpointGrp = document.getElementById('endpoint-group');
+    var endpointEl  = document.getElementById('llm_endpoint');
+    var refreshBtn  = document.getElementById('refresh-btn');
+    var modelSel    = document.getElementById('llm_model_select');
+    var hiddenModel = document.getElementById('llm_model_hidden');
+    var hiddenOllama    = document.getElementById('ollama_ep_hidden');
+    var hiddenLmstudio  = document.getElementById('lmstudio_ep_hidden');
+    var statusEl    = document.getElementById('endpoint-status');
+    var modelHint   = document.getElementById('model-hint');
+    var form        = document.querySelector('form');
 
-    statusEl.style.display = 'flex';
-    indicatorEl.className = 'ollama-indicator ollama-checking';
-    textEl.textContent = 'Checking for Ollama...';
+    // Seed hidden endpoint fields from server values
+    hiddenOllama.value   = _llm.ollamaEp;
+    hiddenLmstudio.value = _llm.lmstudioEp;
 
-    fetch('/api/ollama-models')
-        .then(function(resp) { return resp.json(); })
-        .then(function(data) {
-            if (data.available && data.models.length > 0) {
-                indicatorEl.className = 'ollama-indicator ollama-on';
-                textEl.textContent = 'Ollama detected \u2014 ' + data.models.length + ' model' + (data.models.length !== 1 ? 's' : '');
+    // Parse a full model ID into {provider, model}
+    function parseModel(fullId) {
+        if (fullId.indexOf('ollama/') === 0)
+            return { provider: 'ollama',    model: fullId.slice(7) };
+        if (fullId.indexOf('lmstudio/') === 0)
+            return { provider: 'lmstudio',  model: fullId.slice(9) };
+        return { provider: 'openrouter', model: fullId };
+    }
 
-                // Add Ollama models to the dropdown
-                var optgroup = document.createElement('optgroup');
-                optgroup.label = 'Ollama (Local)';
-                var matchedSaved = false;
-                data.models.forEach(function(name) {
-                    var opt = document.createElement('option');
-                    opt.value = 'ollama/' + name;
-                    opt.textContent = name + ' (Local)';
-                    if (opt.value === savedModel) {
-                        opt.selected = true;
-                        matchedSaved = true;
-                    }
-                    optgroup.appendChild(opt);
-                });
-                selectEl.appendChild(optgroup);
-                // Clear server-selected option if we matched the saved Ollama model
-                if (matchedSaved) {
-                    Array.prototype.forEach.call(selectEl.options, function(o) {
-                        if (!o.value.startsWith('ollama/') && o.selected) {
-                            o.selected = false;
-                        }
-                    });
-                }
-            } else if (data.available) {
-                indicatorEl.className = 'ollama-indicator ollama-on';
-                textEl.textContent = 'Ollama detected \u2014 no models pulled yet';
-            } else {
-                indicatorEl.className = 'ollama-indicator ollama-off';
-                textEl.textContent = 'Ollama not detected';
-            }
-        })
-        .catch(function() {
-            indicatorEl.className = 'ollama-indicator ollama-off';
-            textEl.textContent = 'Ollama not detected';
+    // Populate the model <select> from an array of {value, label} objects
+    function setOptions(items, selectedValue) {
+        modelSel.innerHTML = '';
+        items.forEach(function(item) {
+            var opt = document.createElement('option');
+            opt.value = item.value;
+            opt.textContent = item.label;
+            if (item.value === selectedValue) opt.selected = true;
+            modelSel.appendChild(opt);
         });
+        syncHidden();
+    }
+
+    // Populate with the static OpenRouter model list
+    function populateOpenRouter(selectedModel) {
+        var items = Object.keys(_llm.orModels).map(function(k) {
+            return { value: k, label: _llm.orModels[k] };
+        });
+        setOptions(items, selectedModel);
+        modelHint.textContent = 'API key loaded from .env (OPENROUTER_API_KEY)';
+    }
+
+    // Fetch models from a local provider and populate the dropdown
+    function refresh(provider, endpoint, selectModel) {
+        statusEl.textContent = 'Checking\u2026';
+        modelSel.disabled = true;
+        refreshBtn.disabled = true;
+
+        var url = '/api/local-models?provider=' + encodeURIComponent(provider)
+                + '&endpoint='  + encodeURIComponent(endpoint);
+
+        fetch(url)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                modelSel.disabled = false;
+                refreshBtn.disabled = false;
+                if (data.available && data.models.length > 0) {
+                    statusEl.textContent = data.models.length + ' model(s) found';
+                    var items = data.models.map(function(m) {
+                        return { value: m, label: m };
+                    });
+                    setOptions(items, selectModel);
+                } else if (data.available) {
+                    statusEl.textContent = 'Connected \u2014 no models found';
+                    modelSel.innerHTML = '<option value="">-- no models --</option>';
+                } else {
+                    statusEl.textContent = 'Could not connect to server';
+                    modelSel.innerHTML = '<option value="">-- connection failed --</option>';
+                }
+            })
+            .catch(function() {
+                modelSel.disabled = false;
+                refreshBtn.disabled = false;
+                statusEl.textContent = 'Connection failed';
+                modelSel.innerHTML = '<option value="">-- connection failed --</option>';
+            });
+    }
+
+    // Apply UI state for the selected provider
+    function applyProvider(provider, selectedModel) {
+        if (provider === 'openrouter') {
+            endpointGrp.style.display = 'none';
+            populateOpenRouter(selectedModel);
+        } else {
+            endpointGrp.style.display = '';
+            modelHint.textContent = '';
+            var ep = provider === 'ollama' ? _llm.ollamaEp : _llm.lmstudioEp;
+            endpointEl.value = ep;
+            statusEl.textContent = '';
+            refresh(provider, ep, selectedModel);
+        }
+    }
+
+    // Keep hidden llm_model field in sync with visible select + provider
+    function syncHidden() {
+        var provider = providerEl.value;
+        var raw = modelSel.value;
+        if (!raw) { hiddenModel.value = ''; return; }
+        if (provider === 'ollama')     hiddenModel.value = 'ollama/' + raw;
+        else if (provider === 'lmstudio') hiddenModel.value = 'lmstudio/' + raw;
+        else hiddenModel.value = raw;
+    }
+
+    // Events
+    providerEl.addEventListener('change', function() {
+        applyProvider(providerEl.value, '');
+    });
+
+    modelSel.addEventListener('change', syncHidden);
+
+    refreshBtn.addEventListener('click', function() {
+        var provider = providerEl.value;
+        var ep = endpointEl.value.trim();
+        if (provider === 'ollama')    hiddenOllama.value   = ep;
+        if (provider === 'lmstudio') hiddenLmstudio.value = ep;
+        refresh(provider, ep, modelSel.value);
+    });
+
+    endpointEl.addEventListener('change', function() {
+        var provider = providerEl.value;
+        var ep = endpointEl.value.trim();
+        if (provider === 'ollama')    hiddenOllama.value   = ep;
+        if (provider === 'lmstudio') hiddenLmstudio.value = ep;
+    });
+
+    form.addEventListener('submit', function() {
+        var provider = providerEl.value;
+        var ep = endpointEl.value.trim();
+        if (provider === 'ollama')    hiddenOllama.value   = ep;
+        if (provider === 'lmstudio') hiddenLmstudio.value = ep;
+        syncHidden();
+    });
+
+    // Initialise on page load
+    var parsed = parseModel(_llm.current);
+    providerEl.value = parsed.provider;
+    applyProvider(parsed.provider, parsed.model);
 })();
 </script>
 {% endblock %}

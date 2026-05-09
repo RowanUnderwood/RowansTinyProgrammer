@@ -513,6 +513,24 @@ h2 {
     background: #c0392b;
 }
 
+/* Endpoint row: text input + refresh button side by side */
+.endpoint-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.endpoint-row input {
+    flex: 1;
+}
+
+.endpoint-row .btn-secondary {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
 /* Footer */
 footer {
     text-align: center;

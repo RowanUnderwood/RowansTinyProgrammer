@@ -34,8 +34,15 @@ AVAILABLE_MODELS = {
     "ollama/qwen3:8b": ("Qwen3 8B (Local)", "Qwen3-8B"),
 }
 
-# Ollama endpoint (can override via env)
-OLLAMA_ENDPOINT = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434")
+def _get_ollama_endpoint():
+    """Get Ollama base URL from live config (read at call time, not import time)."""
+    import config as _config
+    return getattr(_config, 'OLLAMA_ENDPOINT', 'http://localhost:11434')
+
+def _get_lmstudio_endpoint():
+    """Get LM Studio base URL from live config (read at call time, not import time)."""
+    import config as _config
+    return getattr(_config, 'LMSTUDIO_ENDPOINT', 'http://localhost:1234')
 
 # Special modes for random model selection
 SURPRISE_ME = "surprise_me"
@@ -53,12 +60,31 @@ def detect_ollama_models(endpoint=None):
         tuple: (available: bool, models: list[str]) where models are raw
                model names like 'qwen2.5-coder:1.5b'
     """
-    url = (endpoint or OLLAMA_ENDPOINT).rstrip("/") + "/api/tags"
+    url = (endpoint or _get_ollama_endpoint()).rstrip("/") + "/api/tags"
     try:
         resp = requests.get(url, timeout=3)
         if resp.status_code == 200:
             data = resp.json()
             models = [m["name"] for m in data.get("models", [])]
+            return (True, models)
+    except (requests.RequestException, ValueError):
+        pass
+    return (False, [])
+
+
+def detect_lmstudio_models(endpoint=None):
+    """
+    Detect if LM Studio is running and list available models.
+
+    Returns:
+        tuple: (available: bool, models: list[str]) where models are raw model IDs
+    """
+    url = (endpoint or _get_lmstudio_endpoint()).rstrip("/") + "/v1/models"
+    try:
+        resp = requests.get(url, timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = [m["id"] for m in data.get("data", [])]
             return (True, models)
     except (requests.RequestException, ValueError):
         pass
@@ -91,8 +117,9 @@ class LLMGenerator:
             self._pick_random_local_model()
 
     def _pick_random_cloud_model(self):
-        """Pick a random cloud model (exclude local ollama models)."""
-        cloud_models = [k for k in AVAILABLE_MODELS.keys() if not k.startswith("ollama/")]
+        """Pick a random cloud model (exclude local models)."""
+        cloud_models = [k for k in AVAILABLE_MODELS.keys()
+                        if not k.startswith(("ollama/", "lmstudio/"))]
         self.model_name = random.choice(cloud_models)
         print(f"[LLM] Surprise! Selected: {self.get_short_name()}")
 
@@ -120,8 +147,12 @@ class LLMGenerator:
         elif model_name.startswith("ollama/"):
             # Dynamic Ollama model not in AVAILABLE_MODELS — allow it
             self.model_name = model_name
-            display = model_name.replace("ollama/", "")
+            display = model_name.replace("ollama/", "", 1)
             print(f"[LLM] Switched to Ollama model: {display}")
+        elif model_name.startswith("lmstudio/"):
+            self.model_name = model_name
+            display = model_name.replace("lmstudio/", "", 1)
+            print(f"[LLM] Switched to LM Studio model: {display}")
         else:
             print(f"[LLM] Unknown model: {model_name}, keeping {self.model_name}")
 
@@ -149,7 +180,9 @@ class LLMGenerator:
         if self.model_name in AVAILABLE_MODELS:
             return AVAILABLE_MODELS[self.model_name][1]
         if self.model_name.startswith("ollama/"):
-            return self.model_name.replace("ollama/", "")
+            return self.model_name.replace("ollama/", "", 1)
+        if self.model_name.startswith("lmstudio/"):
+            return self.model_name.replace("lmstudio/", "", 1)
         return "?"
 
     def get_available_models(self) -> dict:
@@ -167,6 +200,8 @@ class LLMGenerator:
         """
         if self.model_name.startswith("ollama/"):
             yield from self._stream_ollama(prompt, max_tokens, temperature, stop)
+        elif self.model_name.startswith("lmstudio/"):
+            yield from self._stream_lmstudio(prompt, max_tokens, temperature, stop)
         else:
             yield from self._stream_openrouter(prompt, max_tokens, temperature, stop)
 
@@ -252,9 +287,8 @@ class LLMGenerator:
     def _stream_ollama(self, prompt: str, max_tokens: int,
                        temperature: float, stop: list) -> Generator[str, None, None]:
         """Stream from local Ollama server."""
-        # Extract model name (remove "ollama/" prefix)
-        model = self.model_name.replace("ollama/", "")
-        url = f"{OLLAMA_ENDPOINT}/api/generate"
+        model = self.model_name.replace("ollama/", "", 1)
+        url = f"{_get_ollama_endpoint().rstrip('/')}/api/generate"
 
         data = {
             "model": model,
@@ -298,6 +332,56 @@ class LLMGenerator:
             print(f"[LLM] Error streaming from Ollama: {e}")
             raise
 
+    def _stream_lmstudio(self, prompt: str, max_tokens: int,
+                         temperature: float, stop: list) -> Generator[str, None, None]:
+        """Stream from local LM Studio server (OpenAI-compatible, no auth required)."""
+        model = self.model_name.replace("lmstudio/", "", 1)
+        url = f"{_get_lmstudio_endpoint().rstrip('/')}/v1/chat/completions"
+
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+        }
+        if stop:
+            data["stop"] = stop
+
+        print(f"[LLM] Sending request to LM Studio ({model})")
+
+        try:
+            with requests.post(url, headers=headers, json=data, stream=True, timeout=(10, 120)) as response:
+                if response.status_code != 200:
+                    raise Exception(f"LM Studio error! (err: {response.status_code})")
+                for line in response.iter_lines():
+                    if line:
+                        decoded = line.decode('utf-8')
+                        if decoded.startswith('data: '):
+                            data_str = decoded[6:]
+                            if data_str == '[DONE]':
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                choices = chunk.get('choices', [])
+                                if choices:
+                                    delta = choices[0].get('delta', {})
+                                    text = delta.get('content', '')
+                                    if text:
+                                        yield text
+                            except json.JSONDecodeError:
+                                pass
+        except requests.exceptions.ConnectionError:
+            raise Exception("Can't connect to LM Studio! Is it running?")
+        except requests.exceptions.Timeout:
+            raise Exception("LM Studio timed out! Model might be too slow.")
+        except Exception as e:
+            if "LM Studio" in str(e):
+                raise
+            print(f"[LLM] Error streaming from LM Studio: {e}")
+            raise
+
     def get_header(self, program_type: str = "") -> str:
         """Get the standard imports header. Extended for wireframe_plot."""
         base = "import time\nimport random\nimport math\nfrom tiny_canvas import Canvas\n\nc = Canvas()\n"
@@ -321,8 +405,8 @@ class LLMGenerator:
         if program_type == "wireframe_plot":
             return self._build_wireframe_prompt(lessons)
 
-        # Local Ollama models get a stripped-down prompt (weak instruction following)
-        if self.model_name.startswith("ollama/"):
+        # Local models get a stripped-down prompt (weak instruction following)
+        if self.model_name.startswith(("ollama/", "lmstudio/")):
             return self._build_simple_prompt(program_type, creative)
 
         description = _resolve_description(program_type)

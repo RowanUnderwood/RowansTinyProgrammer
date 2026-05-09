@@ -108,7 +108,8 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "")
 LLM_ENDPOINT = "http://localhost:8080/completion"
 
 # Ollama endpoint
-OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
+OLLAMA_ENDPOINT = "http://localhost:11434"
+LMSTUDIO_ENDPOINT = os.environ.get("LMSTUDIO_ENDPOINT", "http://localhost:1234")
 OLLAMA_MODEL = "gemma3:1b"
 
 # Path to model for subprocess mode (llamacpp only)

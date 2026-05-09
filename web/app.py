@@ -53,9 +53,21 @@ def create_app():
             return jsonify(_brain.get_status())
         return jsonify({"error": "Brain not initialized"})
 
+    @app.route('/api/local-models')
+    def api_local_models():
+        """Return detected local models for a given provider."""
+        from llm.generator import detect_ollama_models, detect_lmstudio_models
+        provider = request.args.get('provider', 'ollama')
+        endpoint = request.args.get('endpoint', '').strip() or None
+        if provider == 'lmstudio':
+            available, models = detect_lmstudio_models(endpoint)
+        else:
+            available, models = detect_ollama_models(endpoint)
+        return jsonify({"available": available, "models": models})
+
     @app.route('/api/ollama-models')
     def api_ollama_models():
-        """Return detected Ollama models as JSON."""
+        """Legacy route — delegates to /api/local-models?provider=ollama."""
         from llm.generator import detect_ollama_models
         available, models = detect_ollama_models()
         return jsonify({"available": available, "models": models})
@@ -164,13 +176,21 @@ def create_app():
             # Collect form data
             updates = {}
 
-            # LLM model selection (OpenRouter)
+            # LLM model selection (full model ID constructed by JS)
             selected_model = request.form.get('llm_model', DEFAULT_MODEL)
             updates['LLM_MODEL'] = selected_model
 
             # If brain is running, update the model immediately
             if _brain and hasattr(_brain, 'llm'):
                 _brain.llm.set_model(selected_model)
+
+            # Local provider endpoints
+            ollama_ep = request.form.get('ollama_endpoint', '').strip()
+            if ollama_ep:
+                updates['OLLAMA_ENDPOINT'] = ollama_ep
+            lmstudio_ep = request.form.get('lmstudio_endpoint', '').strip()
+            if lmstudio_ep:
+                updates['LMSTUDIO_ENDPOINT'] = lmstudio_ep
 
             updates['LLM_TEMPERATURE'] = float(request.form.get('llm_temperature', 0.7))
             updates['LLM_MAX_TOKENS'] = int(request.form.get('llm_max_tokens', 512))
@@ -225,12 +245,11 @@ def create_app():
         if _brain and hasattr(_brain, 'llm'):
             current_model = _brain.llm.get_current_model()
 
-        # Build models dict with display names for template
-        models_for_template = {}
-        models_for_template[SURPRISE_ME] = "Surprise Me!"
-        models_for_template[SURPRISE_ME_LOCAL] = "Surprise Me! (Local)"
+        # Build OpenRouter-only models dict for the provider dropdown
+        openrouter_models = {SURPRISE_ME: "Surprise Me!"}
         for k, v in AVAILABLE_MODELS.items():
-            models_for_template[k] = v[0]  # v is (display_name, short_name)
+            if not k.startswith(("ollama/", "lmstudio/")):
+                openrouter_models[k] = v[0]  # v is (display_name, short_name)
 
         # Get available color schemes
         from display.color_adjustment import COLOR_SCHEMES
@@ -239,7 +258,7 @@ def create_app():
         return render_template('settings.html',
                              config=current,
                              message=message,
-                             available_models=models_for_template,
+                             openrouter_models=openrouter_models,
                              current_model=current_model,
                              color_schemes=color_schemes)
 
